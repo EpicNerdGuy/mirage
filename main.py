@@ -1,7 +1,11 @@
-from flask import Flask, render_template_string
+from flask import Flask, request, jsonify, render_template_string
+from collections import deque
+import logging 
 
 app = Flask(__name__)
 
+agent_to_listener = deque()
+listener_to_agent = deque()
 # ─────────────────────────────────────────────
 # 1. THE STYLING (Defined first to avoid NameErrors)
 # ─────────────────────────────────────────────
@@ -239,6 +243,8 @@ def about():
     """
     return render_mirage(html)
 
+
+
 @app.route("/contact")
 def contact():
     html = """
@@ -263,9 +269,37 @@ def contact():
     """
     return render_mirage(html)
 
+@app.route("/api/telemetry", methods=['POST'])
+def agent_upload():
+    data = request.json.get("data")
+    if data:
+        agent_to_listener.append(data)
+    return jsonify({"status":"ok"})
+
+@app.route("/api/telemetry", methods=['GET'])
+def agent_download():
+    if listener_to_agent:
+        return jsonify({"status":"ok","data":listener_to_agent.popleft()})
+    return jsonify({"status":"ok","data":None})
+
+@app.route("/api/sync", methods=['POST'])
+def listener_upload():
+    data = request.json.get("data")
+    if data:
+        listener_to_agent.append(data)
+    return jsonify({"status":"ok","data":None})
+
+@app.route("/api/sync", methods=["GET"])
+def listener_download():
+    if agent_to_listener:
+        return jsonify({"status":"ok","data":agent_to_listener.popleft()})
+    return jsonify({"status":"ok","data":None})
+
 # ─────────────────────────────────────────────
 # 5. EXECUTION
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
     print("[mirage] Aesthetic interface live on http://localhost:4696")
     app.run(host="0.0.0.0", port=4696, debug=True)
+
+    

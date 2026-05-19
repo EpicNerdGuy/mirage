@@ -18,11 +18,13 @@ user_agent = 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, lik
 
 def uploadData(data):
     # TODO: Implement your own data upload logic here - 'data' is a base64 string
+    agent_upload()
     return
 
 def downloadData():
     # TODO: Implement your own data download logic here
     # Make sure to return a base64 string or an empty string if no data is available
+    agent_download()
     return ""
 
 def get_random_string(length):
