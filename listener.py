@@ -11,14 +11,19 @@ import platform
 import math
 from havoc.externalc2 import ExternalC2
 
+URL = "http://127.0.0.1:4696"
+
 def uploadData(data):
-    # TODO: Implement your own data upload logic here - 'data' is a base64 string
+    requests.post(
+        f"{URL}/api/sync",
+        json={"data": data}
+    )
     return
 
 def downloadData():
-    # TODO: Implement your own data download logic here
-    # Make sure to return a base64 string or an empty string if no data is available
-    return ""
+    r = requests.get(f"{URL}/api/sync")
+    result = r.json().get("data")
+    return result if result else ""
 
 def getAgentData():
     print("[+] Downloading data")

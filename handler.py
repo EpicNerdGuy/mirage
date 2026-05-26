@@ -56,8 +56,8 @@ class CommandExit( Command ):
 # ===== Agent Class =====
 # =======================
 class python(AgentType):
-    Name = "TODO: YOUR AGENT NAME HERE"
-    Author = "@OfficialScragg"
+    Name = "Mirage"
+    Author = "@711intern"
     Version = "1.0"
     Description = f"""Super cool custom C2 channel agent."""
     MagicValue = 0x41414141

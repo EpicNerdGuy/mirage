@@ -1,5 +1,5 @@
 import base64
-from cgi import print_form
+
 
 from havoc.agent import AgentType
 from havoc.externalc2 import ExternalC2
