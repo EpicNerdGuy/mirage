@@ -1,27 +1,134 @@
-# Havoc C3
-Havoc Custom Communication Channels (Havoc C3) is a custom agent and listener template that integrates with Havoc C2 Framework to allow developers to easily implement their own custom communication channels between the agent implant and the C2 teamserver.
+# Mirage
+**Mirage** is a custom C3 (Custom Communication Channel) built on top of the [Havoc C2 Framework](https://github.com/HavocFramework/Havoc). It routes agent traffic covertly through a public-facing website turning ordinary HTTP endpoints into a fully functional command-and-control channel.
 
-### Project Structure
-The files you see in the repo are as follows:
-- `havoc/*` - These are the Havoc C2 service Python files. They need to be in the same directory as the Listener and Handler.
-- `agent.py` - This is the Python malware implant that runs on the victim machine. It's not FUD by any means, if you want it undetectable, that'll take some work from your side.
-- `handler.py` - This registers the agent and listener with the Havoc teamserver and is also responsible for generating the agent payloads (but that part isn't implemented).
-- `listener.py` - This script sits on the attacker side of the equation. It is responsible for translating agent communications from the custom channel and handing it over to the teamserver. It also takes commands from the teamserver and sends them over the custom channel to the agent. This is essentially the translation layer between the custom agent and the standard teamserver.
+The teamserver never speaks directly to the agent. Instead, commands and responses flow through a website acting as a dead drop, making traffic indistinguishable from normal web activity.
 
-### Getting Started
-1) Clone the repo.
-2) Change the config at the top of the `python` class in `handler.py` to whatever you want.
-3) Look inside `agent.py` and `listener.py`. You'll see two functions in each which are called `uploadData` and `downloadData`. These are the functions where you need to implement your custom channel.
-4) `uploadData` - This receives a Base64 string as input and needs to encode that data and send it along the custom communication channel.
-5) `downloadData` - This is called when the agent or listener wishes to retrieve data from the custom channel. This function must output the original data which was sent over the channel as a Base64 string.
-6) Implement these two functions in both `agent.py` and `listener.py`.
-7) Clone, build, and spin up Havoc C2 Framework.
-8) Execute the handler.
-9) Execute the listener.
-10) Execute the agent on the victim machine.
-11) Profit.
+---
 
-Everything between upload and download relies on your communication channel implementation. The vast majority of the Havoc related stuff is abstracted away, so all you need to deal with is moving Base64 data over a channel and downloading and decoding it on the other side.
+## How It Works
 
-### Known issues
-- It's janky, if you have issues let me know and we can try fix them.
+<img width="1517" height="642" alt="image" src="https://github.com/user-attachments/assets/4a7f047c-9106-4705-b5c7-b3bb3785c0fd" />
+
+
+**Step by step:**
+
+1. Operator types a command in the Havoc client
+2. `listener.py` polls the Havoc client for pending commands
+3. Listener sees the queued command
+4. Listener uploads the command to the website via `POST /api/sync` (`uploadData`)
+5. Agent polls the website for new commands via `GET /api/telemetry` (`downloadData`)
+6. Website returns the command to the agent
+7. Agent executes the command and uploads the response via `POST /api/telemetry` (`uploadData`)
+8. Listener fetches the agent response from the website via `GET /api/sync` (`downloadData`)
+9. Listener sends the response back to the Havoc client
+10. Output appears in the teamserver UI
+
+The website is the covert dead drop, neither the teamserver nor the agent ever talk to each other directly.
+
+---
+
+## Project Structure
+
+```
+mirage/
+├── havoc/          # Havoc C2 service Python files (must stay alongside handler/listener)
+├── agent.py        # Implant — runs on the victim machine
+├── handler.py      # Registers the agent & listener with the Havoc teamserver
+├── listener.py     # Translation layer between the custom channel and the teamserver
+└── main.py         # Entry point
+```
+
+### Component Breakdown
+
+| File | Role | Runs on |
+|------|------|---------|
+| `handler.py` | Registers agent + listener with teamserver, handles payload config | Attacker machine |
+| `listener.py` | Polls teamserver for cmds, relays via website (`/api/sync`) | Attacker machine |
+| `agent.py` | Executes commands, relays output via website (`/api/telemetry`) | Victim machine |
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- [Havoc C2 Framework](https://github.com/HavocFramework/Havoc) cloned, built, and running
+- Python 3.x
+- A web server exposing `/api/sync` and `/api/telemetry` endpoints (your custom channel)
+
+### Setup
+
+**1. Clone the repo**
+```bash
+git clone https://github.com/yourname/mirage
+cd mirage
+```
+
+**2. Configure the handler**
+
+Open `handler.py` and edit the config block at the top of the `python` class:
+```python
+# Teamserver connection
+HOST = "127.0.0.1"
+PORT = 40056
+USER = "operator"
+PASS = "your-password"
+```
+
+**3. Implement your custom channel**
+
+In both `agent.py` and `listener.py`, implement two functions:
+
+```python
+def uploadData(data: str):
+    """
+    Receives a Base64 string.
+    Encode and send it over your custom channel (e.g. POST to your website).
+    """
+    pass
+
+def downloadData() -> str:
+    """
+    Poll your custom channel for incoming data.
+    Return the raw Base64 string that was uploaded on the other side.
+    """
+    pass
+```
+
+Everything else is abstracted away. Your only job is moving Base64 blobs through your chosen medium a website, a pastebin, a tweet, an image whatever you want the channel to be.
+
+**4. Start the Havoc teamserver** (if not already running)
+```bash
+cd /path/to/Havoc
+./havoc server --profile ./profiles/havoc.yaotl --debug
+```
+
+**5. Run in order**
+```bash
+# Terminal 1 — register with teamserver
+python3 handler.py
+
+# Terminal 2 — start the listener (translation layer)
+python3 listener.py
+
+# Terminal 3 — run the agent on the victim machine
+python3 agent.py
+```
+
+---
+
+## Extending Mirage
+
+The channel implementation is entirely up to you. Some ideas:
+
+- **Website dead drop** — POST/GET to a Flask or Express app (reference implementation)
+- **Cloud storage** — S3 bucket, Google Drive, Dropbox
+- **Social media** — Twitter/X DMs, Discord webhooks, Reddit posts
+- **DNS** — encode data in DNS TXT record queries
+- **Steganography** — hide payloads inside images uploaded to Imgur
+
+As long as `uploadData` and `downloadData` are inverse operations that round-trip Base64 cleanly, any channel works.
+
+## Disclaimer
+
+Mirage is intended for authorized penetration testing and red team engagements only. Use against systems you do not own or have explicit written permission to test is illegal. The authors assume no liability for misuse.
