@@ -219,17 +219,14 @@ class AgentType:
             )
         )
 
-        timeout = 10
-        start = time.time()
-        while True:
-            time.sleep(0.1)
+        while ( True ):
+            time.sleep(0.05)
             if RandID in self._current_data:
                 Tasks = self._current_data[ RandID ]
                 del self._current_data[ RandID ]
                 break
-            if time.time() - start > timeout:
-                print(f"[-] Timeout waiting for tasks {RandID}")
-                break
+            else:
+                continue
 
         return Tasks
 

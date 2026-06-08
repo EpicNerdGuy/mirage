@@ -1,6 +1,5 @@
 import base64
 
-
 from havoc.agent import AgentType
 from havoc.externalc2 import ExternalC2
 from threading import Thread
@@ -47,7 +46,7 @@ class HavocService:
             on_open=self.__ws_on_open
         )
 
-        Thread( target=self.Socket.run_forever, kwargs={'sslopt': {'check_hostname': False, "cert_reqs": ssl.CERT_NONE}} ).start()
+        Thread(target=self.Socket.run_forever, kwargs={'sslopt': {'check_hostname': False, "cert_reqs": ssl.CERT_NONE}}).start()
 
         while True:
             if self.Connected:
@@ -60,80 +59,65 @@ class HavocService:
 
     def __ws_on_open(self, socket):
         print("[*] teamserver socket opened")
-
         request = json.dumps(
             build_request("Register", {
                 "Password": self.Password
             }),
             sort_keys=True
         )
-
-        socket.send( request )
+        socket.send(request)
         return
 
-    def __ws_on_message( self, ws, data ):
-        print( "[*] New Message" )
-    
-        data = json.loads( data )
-
+    def __ws_on_message(self, ws, data):
+        print("[*] New Message")
+        data = json.loads(data)
         t = Thread(target=self.service_dispatch, args=(data,))
         t.start()
-
-        # self.service_dispatch( json.loads( data ) )
-
         return
 
-    def register_agent( self, agent_type: AgentType ):
-
-        # todo: check BuildConfig if everything is by rule
-
+    def register_agent(self, agent_type: AgentType):
         if self.RegisteredAgent is None:
-            print( "[*] Register agent (service.py)" )
-
+            print("[*] Register agent (service.py)")
             self.RegisteredAgent = agent_type
             self.RegisteredAgent._Service_instance = self
-
-            request = json.dumps(
-                build_request( "RegisterAgent", {
-                    "Agent": agent_type.get_dict()
-                } ),
-                sort_keys=True
-            )
-
-            self.Socket.send( request )
-        else:
-            print( "[!] Agent already registered" )
-
-        return
-
-    def register_externalc2( self, externalc2: ExternalC2 ):
-
-        if self.ExternalC2 is None:
-
-            self.ExternalC2 = externalc2
-            self.ExternalC2._Service_instance = self
-
             request = json.dumps(
                 build_request("RegisterAgent", {
                     "Agent": agent_type.get_dict()
                 }),
                 sort_keys=True
             )
-
             self.Socket.send(request)
         else:
-            print( "[-] External C2 already registered" )
-
+            print("[!] Agent already registered")
         return
 
-    def service_dispatch( self, data: dict ):
+    def register_externalc2(self, externalc2: ExternalC2):
+        if self.ExternalC2 is None:
+            self.ExternalC2 = externalc2
+            self.ExternalC2._Service_instance = self
+            request = json.dumps(
+                build_request("RegisterAgent", {
+                    "Agent": externalc2.get_dict()
+                }),
+                sort_keys=True
+            )
+            self.Socket.send(request)
+        else:
+            print("[-] External C2 already registered")
+        return
 
-        match data[ "Head" ][ "Type" ]:
+    def __handle_agent_response(self, data: dict):
+        agent_response = self.RegisteredAgent.response(data["Body"])
+        data["Body"]["Response"] = base64.b64encode(agent_response).decode('utf-8')
+        self.Socket.send(json.dumps(data))
+        return
+
+    def service_dispatch(self, data: dict):
+
+        match data["Head"]["Type"]:
 
             case "Register":
-
-                self.Connected = data[ "Body" ][ "Success" ]
-
+                self.Connected = data["Body"]["Success"]
                 return
 
             case "RegisterAgent":
@@ -141,32 +125,26 @@ class HavocService:
 
             case "Agent":
 
-                match data[ "Body" ][ "Type" ]:
+                match data["Body"]["Type"]:
 
                     case "AgentTask":
+                        if data["Body"]["Task"] == "Get":
+                            RandID = data["Body"]["RandID"]
+                            Tasks  = base64.b64decode(data["Body"]["TasksQueue"])
+                            print(f"Set TasksQueue to {RandID} = {Tasks.hex()}")
+                            self.RegisteredAgent._current_data[RandID] = Tasks
 
-                        if data[ "Body" ][ "Task" ] == "Get":
-                            RandID = data[ "Body" ][ "RandID" ]
-                            Tasks  = base64.b64decode( data[ "Body" ][ "TasksQueue" ] )
-                        
-                            print( f"Set TasksQueue to {RandID} = {Tasks.hex()}" )
+                        elif data["Body"]["Task"] == "Add":
+                            data["Body"]["Command"] = base64.b64encode(
+                                self.RegisteredAgent.task_prepare(data['Body']['Command'])
+                            ).decode('utf-8')
 
-                            self.RegisteredAgent._current_data[ RandID ] = Tasks
-
-                        elif data[ "Body" ][ "Task" ] == "Add":
-                            data[ "Body" ][ "Command" ] = base64.b64encode( self.RegisteredAgent.task_prepare( data[ 'Body' ][ 'Command' ] ) ).decode( 'utf-8' )
-
-                        self.Socket.send( json.dumps( data ) )
+                        self.Socket.send(json.dumps(data))
 
                     case "AgentResponse":
-                    
-                        agent_response = self.RegisteredAgent.response( data[ "Body" ] )
-                        data[ "Body" ][ "Response" ] = base64.b64encode( agent_response ).decode( 'utf-8' )
-                        
-                        self.Socket.send( json.dumps( data ) )
+                        Thread(target=self.__handle_agent_response, args=(data,)).start()
 
                     case "AgentBuild":
-
-                        self.RegisteredAgent.generate( data[ "Body" ] )
+                        self.RegisteredAgent.generate(data["Body"])
 
         return

